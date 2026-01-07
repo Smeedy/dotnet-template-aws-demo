@@ -8,6 +8,9 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Enable or disable swagger from appsettings
+var enableSwagger = builder.Configuration.GetValue<bool>("Swagger:Enabled");
+
 // Add other layers
 builder.AddApplication();
 builder.AddInfrastructure();
@@ -42,8 +45,15 @@ var app = builder.Build();
 app.UseExceptionHandler();
 
 // Configure the HTTP request pipeline.
-app.UseSwagger();
-app.UseSwaggerUI(options => options.AddCustomSwaggerUIOptions(app.Environment.IsDevelopment()));
+if (enableSwagger) {
+    app.UseSwagger(); // <-- belangrijk: dit expose't de JSON endpoints
+    app.UseSwaggerUI(options => {
+        options.RoutePrefix = "swagger";
+        options.AddCustomSwaggerUIOptions(app.Environment.IsDevelopment());
+    });
+
+    //app.MapSwagger().RequireAuthorization(AuthorizationPolicy.Admin);
+}
 
 app.UseSerilogRequestLogging();
 

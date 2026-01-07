@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: weather
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d weather"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    image: dotnet-template:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: "Production"
+
+      # Enable Swagger in every environment
+      Swagger__Enabled: "true"
+
+      # Disable Testcontainers inside container
+      TestContainers__Enabled: "false"
+
+      # DB (adjust key if needed)
+      #ConnectionStrings__Default: "Host=postgres;Port=5432;Database=weather;Username=postgres;Password=postgres"
+      InfrastructureConfig__ConnectionString: "Host=postgres;Port=5432;Database=weather;Username=postgres;Password=postgres"
+
+      # JWT Bearer config (user-jwts compatible)
+      Authentication__Schemes__Bearer__ValidIssuer: "dotnet-user-jwts"
+      Authentication__Schemes__Bearer__ValidAudiences__0: "weather.dev.api"
+      Authentication__Schemes__Bearer__SigningKeys__0__Issuer: "dotnet-user-jwts"
+      Authentication__Schemes__Bearer__SigningKeys__0__Value: "${JWT_KEY_B64}"
+      Authentication__Schemes__Bearer__SigningKeys__0__Length: "32"
+
+  migrator:
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    working_dir: /src
+    volumes:
+      - ./:/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CI: "true"
+      InfrastructureConfig__ConnectionString: "Host=postgres;Port=5432;Database=weather;Username=postgres;Password=postgres"
+    command: >
+      bash -lc "
+        dotnet restore src/Api/Api.csproj &&
+        dotnet tool install --global dotnet-ef --version 8.* &&
+        export PATH=\"$PATH:/root/.dotnet/tools\" &&
+        dotnet ef database update \\
+          --project src/Infrastructure/Infrastructure.csproj \\
+          --startup-project src/Api/Api.csproj \\
+          --connection \"Host=postgres;Port=5432;Database=weather;Username=postgres;Password=postgres\"
+        "

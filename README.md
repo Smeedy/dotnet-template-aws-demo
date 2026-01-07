@@ -82,3 +82,113 @@ The API uses JWTs for authentication and authorization. The JWTs are validated u
 The Authorization-policies is set per group of routes or individual endpoints as one chooses, and is defined in the `WeatherGroup.cs`-file.
 
 The policies are defined in the `Authorization/ApiAuthorizationPolicy.cs`-file and added when configuring the services in `Program.cs`.
+
+### Docker Compose (Demo, more CI-friendly)
+
+This repository also includes a `docker-compose.yml` that can run the full stack (PostgreSQL + migrations + API) without Visual Studio, `dotnet user-jwts`, or user-secrets.
+
+#### Prerequisites
+
+- Docker (incl. Docker Compose)
+
+#### 1) Generate a signing key and write it to `.env`
+
+We use a shared HMAC key for HS256 JWT signing. Generate a random 32-byte key (base64) and store it in `.env`:
+
+```bash
+umask 077
+JWT_KEY_B64="$(openssl rand -base64 32)"
+printf "JWT_KEY_B64=%s\n" "$JWT_KEY_B64" > .env
+echo "Wrote JWT_KEY_B64 to .env"
+```
+
+#### 2) Start PostgreSQL + run migrations + start API
+
+```bash
+docker compose up -d postgres
+docker compose run --rm migrator
+docker compose up api # we keep it in foreground
+```
+
+Open another shell and validate health:
+
+```bash
+curl -i http://localhost:8080/healthz
+```
+
+#### 3) Prepare client environment and mint tokens
+
+The API expects:
+- `iss`: `dotnet-user-jwts`
+- `aud`: `weather.dev.api`
+- `scope`: includes `read` + `write` for user operations, and `admin` for admin operations.
+
+Run this in your shell (same directory as `.env`):
+
+```bash
+set -euo pipefail
+
+# Read signing key from .env
+JWT_KEY_B64="$(grep '^JWT_KEY_B64=' .env | cut -d= -f2-)"
+JWT_KEY_HEX="$(printf '%s' "$JWT_KEY_B64" | base64 -d | xxd -p -c 256)"
+export JWT_KEY_B64 JWT_KEY_HEX
+
+b64url() { openssl base64 -e -A | tr '+/' '-_' | tr -d '='; }
+
+mint_jwt () {
+  local scopes_json="$1"
+  local aud="weather.dev.api"
+  local iss="dotnet-user-jwts"
+  local now exp header payload signature
+  now="$(date +%s)"
+  exp="$((now + 3600))" # 1 hour validity
+
+  header="$(printf '{"alg":"HS256","typ":"JWT"}' | b64url)"
+  payload="$(printf '{"iss":"%s","aud":"%s","scope":%s,"iat":%d,"exp":%d}' \
+    "$iss" "$aud" "$scopes_json" "$now" "$exp" | b64url)"
+
+  signature="$(printf "%s.%s" "$header" "$payload" \
+    | openssl dgst -sha256 -mac HMAC -macopt hexkey:"$JWT_KEY_HEX" -binary | b64url)"
+
+  printf "%s.%s.%s\n" "$header" "$payload" "$signature"
+}
+
+export READWRITE_TOKEN="$(mint_jwt '["read","write"]')"
+export ADMIN_TOKEN="$(mint_jwt '["admin"]')"
+
+echo "READWRITE_TOKEN ready"
+echo "ADMIN_TOKEN ready"
+```
+
+#### 4) Create a forecast and retrieve it
+
+**Note:** this is a forecast API. The `POST /weather` endpoint validates that the date is **today or later** (UTC). To avoid edge cases, we use tomorrow’s date.
+
+```bash
+FORECAST_DATE="$(date -u -d '+1 day' +'%Y-%m-%d')"
+FORECAST_DT="${FORECAST_DATE}T00:00:00Z"
+
+# Create forecast (write)
+curl -i -X POST \
+  -H "Authorization: Bearer $READWRITE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+        \"date\": \"${FORECAST_DT}\",
+        \"temperatureC\": 12,
+        \"summary\": \"Sunny\"
+      }" \
+  http://localhost:8080/weather
+
+# Get forecast (read)
+curl -i \
+  -H "Authorization: Bearer $READWRITE_TOKEN" \
+  "http://localhost:8080/weather/${FORECAST_DATE}"
+```
+
+(Optional) Delete forecast (admin):
+
+```bash
+curl -i -X DELETE \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8080/weather/${FORECAST_DATE}"
+```
