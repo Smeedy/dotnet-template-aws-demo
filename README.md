@@ -1,5 +1,6 @@
 # Dotnet.Template
 
+
 Hello! This is a basic template for a .NET 8 API project, which can be used as a inspirations for new projects. Using the following technologies:
 
 - .NET 8 & C#
