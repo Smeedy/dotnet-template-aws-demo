@@ -1,0 +1,47 @@
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  REGISTRY: 388762879096.dkr.ecr.eu-central-1.amazonaws.com
+  IMAGE_NAME: "${REGISTRY}/forecast"
+  IMAGE_TAG: "dev-${CI_PIPELINE_ID}"
+  IMAGE_URL: "${IMAGE_NAME}:${IMAGE_TAG}"
+  # for this repository the lifecycle will cleanup all images starting with tag name: pipeline*
+  # it depends on your strategy of course, but make sure you define one before pushing images into the registry.
+
+build:
+  image: 440744237675.dkr.ecr.eu-central-1.amazonaws.com/tools/kaniko-project/executor:latest
+  stage: build
+  environment: prd
+  id_tokens:
+    JWT_TOKEN:
+      aud: $VAULT_ADDR
+  script:
+    - /kaniko/executor 
+        --context $CI_PROJECT_DIR 
+        --dockerfile $CI_PROJECT_DIR/Dockerfile
+        --destination "${IMAGE_URL}"
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: always
+    - when: never
+  
+      
+upload:
+  image: 440744237675.dkr.ecr.eu-central-1.amazonaws.com/tools/kaniko-project/executor:latest
+  stage: deploy
+  environment: prd
+  id_tokens:
+    JWT_TOKEN:
+      aud: $VAULT_ADDR
+  script:
+    - /kaniko/executor
+        --context "${CI_PROJECT_DIR}"
+        --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+        --destination "${IMAGE_URL}"
+        --destination "${IMAGE_NAME}:latest"
+  tags:
+    - docker
+
