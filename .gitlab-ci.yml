@@ -34,7 +34,9 @@ variables:
     - docker
 
 # ------------------------------------------------------------
-# Build - auto on dev branches AND on main (rebuild)
+# Build (no push): dev + main
+#   - dev: builds image tar as artifact, never touches ECR
+#   - main: also builds (still no push) so you see it succeed on trunk
 # ------------------------------------------------------------
 build:
   stage: build
@@ -48,17 +50,25 @@ build:
     - /kaniko/executor
         --context "${CI_PROJECT_DIR}"
         --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+        --no-push
+        --tarPath "image.tar"
         --destination "${IMAGE_URL}"
+  artifacts:
+    expire_in: 1 day
+    when: on_success
+    paths:
+      - image.tar
 
 # ------------------------------------------------------------
-# Upload - ONLY on main, manual
+# Upload (push): main only, manual
+#   - rebuilds and pushes to ECR (plus latest)
 # ------------------------------------------------------------
 upload:
   stage: deploy
   extends:
     - .kaniko
   environment:
-    name: $CI_ENVIRONMENT_NAME
+    name: prd
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       variables: { CI_ENVIRONMENT_NAME: prd }
