@@ -6,77 +6,72 @@ stages:
 variables:
   REGISTRY: 388762879096.dkr.ecr.eu-central-1.amazonaws.com
   IMAGE_NAME: "${REGISTRY}/forecast"
-  IMAGE_TAG: "${CI_ENVIRONMENT_NAME}-${CI_PIPELINE_ID}"
-  IMAGE_URL: "${IMAGE_NAME}:${IMAGE_TAG}"
 
-# ------------------------------------------------------------
-# Trunk mapping: branch -> CI_ENVIRONMENT_NAME
-# ------------------------------------------------------------
-.trunk_rules:
-  rules:
-    - if: '$CI_COMMIT_BRANCH =~ /^(chore|feat|exp|hotfix)\/.+$/'
-      variables: { CI_ENVIRONMENT_NAME: dev }
-      when: on_success
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      variables: { CI_ENVIRONMENT_NAME: prd }
-      when: on_success
-    - when: never
-
-# ------------------------------------------------------------
-# Shared kaniko template
-# ------------------------------------------------------------
 .kaniko:
   image: 440744237675.dkr.ecr.eu-central-1.amazonaws.com/tools/kaniko-project/executor:latest
   id_tokens:
     JWT_TOKEN:
       aud: $VAULT_ADDR
-  tags:
-    - docker
+  tags: [docker]
 
-# ------------------------------------------------------------
-# Build (no push): dev + main
-#   - dev: builds image tar as artifact, never touches ECR
-#   - main: also builds (still no push) so you see it succeed on trunk
-# ------------------------------------------------------------
-build:
-  stage: build
-  extends:
-    - .kaniko
+# ----------------------------
+# Test (dev only)
+# ----------------------------
+test-dev:
+  stage: test
+  image: mcr.microsoft.com/dotnet/sdk:8.0   # pas aan aan je stack
   environment:
-    name: $CI_ENVIRONMENT_NAME
+    name: dev
   rules:
-    - !reference [.trunk_rules, rules]
+    - if: '$CI_COMMIT_BRANCH =~ /^(chore|feat|exp|hotfix)\/.+$/'
+      when: on_success
+    - when: never
+  script:
+    - echo "Running tests for dev branch"
+    - dotnet test --configuration Release
+    # of voor pure demo:
+    # - echo "All tests passed"
+
+# ----------------------------
+# Build (dev only, no push)
+# ----------------------------
+build-dev:
+  stage: build
+  extends: [.kaniko]
+  environment:
+    name: dev
+  needs: ["test-dev"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^(chore|feat|exp|hotfix)\/.+$/'
+      when: on_success
+    - when: never
   script:
     - /kaniko/executor
         --context "${CI_PROJECT_DIR}"
         --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
         --no-push
         --tarPath "image.tar"
-        --destination "${IMAGE_URL}"
+        --destination "${IMAGE_NAME}:dev-${CI_PIPELINE_ID}"
   artifacts:
     expire_in: 1 day
     when: on_success
-    paths:
-      - image.tar
+    paths: [image.tar]
 
-# ------------------------------------------------------------
-# Upload (push): main only, manual
-#   - rebuilds and pushes to ECR (plus latest)
-# ------------------------------------------------------------
-upload:
+# ----------------------------
+# Release upload (tag only, manual)
+# ----------------------------
+upload-release:
   stage: deploy
-  extends:
-    - .kaniko
+  extends: [.kaniko]
   environment:
     name: prd
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      variables: { CI_ENVIRONMENT_NAME: prd }
+    - if: '$CI_COMMIT_TAG'
       when: manual
     - when: never
   script:
     - /kaniko/executor
         --context "${CI_PROJECT_DIR}"
         --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
-        --destination "${IMAGE_URL}"
+        --destination "${IMAGE_NAME}:${CI_COMMIT_TAG}"
         --destination "${IMAGE_NAME}:latest"
