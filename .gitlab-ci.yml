@@ -11,27 +11,69 @@ variables:
   # for this repository the lifecycle will cleanup all images starting with tag name: pipeline*
   # it depends on your strategy of course, but make sure you define one before pushing images into the registry.
 
-build:
+# ------------------------------------------------------------
+# Gitflow mapping: branch -> CI_ENVIRONMENT_NAME
+# ------------------------------------------------------------
+.gitflow_rules:
+  environment:
+    name: $CI_ENVIRONMENT_NAME
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^(chore|feat|exp)\/.+$/'
+      variables: { CI_ENVIRONMENT_NAME: dev }
+      when: on_success
+    - if: '$CI_COMMIT_BRANCH == "development"'
+      variables: { CI_ENVIRONMENT_NAME: tst }
+      when: on_success
+    - if: '$CI_COMMIT_BRANCH =~ /^release\/.+$/'
+      variables: { CI_ENVIRONMENT_NAME: acc }
+      when: on_success
+    - if: '$CI_COMMIT_BRANCH =~ /^hotfix\/.+$/'
+      variables: { CI_ENVIRONMENT_NAME: dev }
+      when: on_success
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      variables: { CI_ENVIRONMENT_NAME: prd }
+      when: on_success
+    - when: never
+
+.gitflow_rules_manual:
+  environment:
+    name: $CI_ENVIRONMENT_NAME
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^(chore|feat|exp)\/.+$/'
+      variables: { CI_ENVIRONMENT_NAME: dev }
+      when: manual
+    - if: '$CI_COMMIT_BRANCH == "development"'
+      variables: { CI_ENVIRONMENT_NAME: tst }
+      when: manual
+    - if: '$CI_COMMIT_BRANCH =~ /^release\/.+$/'
+      variables: { CI_ENVIRONMENT_NAME: acc }
+      when: manual
+    - if: '$CI_COMMIT_BRANCH =~ /^hotfix\/.+$/'
+      variables: { CI_ENVIRONMENT_NAME: dev }
+      when: manual
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      variables: { CI_ENVIRONMENT_NAME: prd }
+      when: never
+    - when: never
+
+.build:
   image: 440744237675.dkr.ecr.eu-central-1.amazonaws.com/tools/kaniko-project/executor:latest
   stage: build
-  environment: prd
+  extends: .gitflow_rules
+  # environment: prd
   id_tokens:
     JWT_TOKEN:
       aud: $VAULT_ADDR
   script:
-    - /kaniko/executor 
-        --context $CI_PROJECT_DIR 
+    - /kaniko/executor
+        --context $CI_PROJECT_DIR
         --dockerfile $CI_PROJECT_DIR/Dockerfile
         --destination "${IMAGE_URL}"
-  rules:
-    - if: $CI_COMMIT_TAG
-      when: always
-    - when: never
-  
-      
-upload:
+
+.upload:
   image: 440744237675.dkr.ecr.eu-central-1.amazonaws.com/tools/kaniko-project/executor:latest
   stage: deploy
+  extends: .gitflow_rules_manual
   environment: prd
   id_tokens:
     JWT_TOKEN:
@@ -45,3 +87,12 @@ upload:
   tags:
     - docker
 
+# ------------------------------------------------------------
+# Concrete jobs
+# ------------------------------------------------------------
+
+build:
+  extends: .build
+
+upload:
+  extends: .upload
