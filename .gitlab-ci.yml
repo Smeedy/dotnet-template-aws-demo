@@ -6,28 +6,15 @@ stages:
 variables:
   REGISTRY: 388762879096.dkr.ecr.eu-central-1.amazonaws.com
   IMAGE_NAME: "${REGISTRY}/forecast"
-  IMAGE_TAG: "dev-${CI_PIPELINE_ID}"
+  IMAGE_TAG: "${CI_ENVIRONMENT_NAME}-${CI_PIPELINE_ID}"
   IMAGE_URL: "${IMAGE_NAME}:${IMAGE_TAG}"
-  # for this repository the lifecycle will cleanup all images starting with tag name: pipeline*
-  # it depends on your strategy of course, but make sure you define one before pushing images into the registry.
 
 # ------------------------------------------------------------
-# Gitflow mapping: branch -> CI_ENVIRONMENT_NAME
+# Trunk mapping: branch -> CI_ENVIRONMENT_NAME
 # ------------------------------------------------------------
-.gitflow_rules:
-  environment:
-    name: $CI_ENVIRONMENT_NAME
+.trunk_rules:
   rules:
-    - if: '$CI_COMMIT_BRANCH =~ /^(chore|feat|exp)\/.+$/'
-      variables: { CI_ENVIRONMENT_NAME: dev }
-      when: on_success
-    - if: '$CI_COMMIT_BRANCH == "development"'
-      variables: { CI_ENVIRONMENT_NAME: tst }
-      when: on_success
-    - if: '$CI_COMMIT_BRANCH =~ /^release\/.+$/'
-      variables: { CI_ENVIRONMENT_NAME: acc }
-      when: on_success
-    - if: '$CI_COMMIT_BRANCH =~ /^hotfix\/.+$/'
+    - if: '$CI_COMMIT_BRANCH =~ /^(chore|feat|exp|hotfix)\/.+$/'
       variables: { CI_ENVIRONMENT_NAME: dev }
       when: on_success
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -35,64 +22,51 @@ variables:
       when: on_success
     - when: never
 
-.gitflow_rules_manual:
-  environment:
-    name: $CI_ENVIRONMENT_NAME
-  rules:
-    - if: '$CI_COMMIT_BRANCH =~ /^(chore|feat|exp)\/.+$/'
-      variables: { CI_ENVIRONMENT_NAME: dev }
-      when: manual
-    - if: '$CI_COMMIT_BRANCH == "development"'
-      variables: { CI_ENVIRONMENT_NAME: tst }
-      when: manual
-    - if: '$CI_COMMIT_BRANCH =~ /^release\/.+$/'
-      variables: { CI_ENVIRONMENT_NAME: acc }
-      when: manual
-    - if: '$CI_COMMIT_BRANCH =~ /^hotfix\/.+$/'
-      variables: { CI_ENVIRONMENT_NAME: dev }
-      when: manual
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      variables: { CI_ENVIRONMENT_NAME: prd }
-      when: never
-    - when: never
-
-.build:
+# ------------------------------------------------------------
+# Shared kaniko template
+# ------------------------------------------------------------
+.kaniko:
   image: 440744237675.dkr.ecr.eu-central-1.amazonaws.com/tools/kaniko-project/executor:latest
-  stage: build
-  extends: .gitflow_rules
-  # environment: prd
   id_tokens:
     JWT_TOKEN:
       aud: $VAULT_ADDR
+  tags:
+    - docker
+
+# ------------------------------------------------------------
+# Build - auto on dev branches AND on main (rebuild)
+# ------------------------------------------------------------
+build:
+  stage: build
+  extends:
+    - .kaniko
+  environment:
+    name: $CI_ENVIRONMENT_NAME
+  rules:
+    - !reference [.trunk_rules, rules]
   script:
     - /kaniko/executor
-        --context $CI_PROJECT_DIR
-        --dockerfile $CI_PROJECT_DIR/Dockerfile
+        --context "${CI_PROJECT_DIR}"
+        --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
         --destination "${IMAGE_URL}"
 
-.upload:
-  image: 440744237675.dkr.ecr.eu-central-1.amazonaws.com/tools/kaniko-project/executor:latest
+# ------------------------------------------------------------
+# Upload - ONLY on main, manual
+# ------------------------------------------------------------
+upload:
   stage: deploy
-  extends: .gitflow_rules_manual
-  environment: prd
-  id_tokens:
-    JWT_TOKEN:
-      aud: $VAULT_ADDR
+  extends:
+    - .kaniko
+  environment:
+    name: $CI_ENVIRONMENT_NAME
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      variables: { CI_ENVIRONMENT_NAME: prd }
+      when: manual
+    - when: never
   script:
     - /kaniko/executor
         --context "${CI_PROJECT_DIR}"
         --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
         --destination "${IMAGE_URL}"
         --destination "${IMAGE_NAME}:latest"
-  tags:
-    - docker
-
-# ------------------------------------------------------------
-# Concrete jobs
-# ------------------------------------------------------------
-
-build:
-  extends: .build
-
-upload:
-  extends: .upload
